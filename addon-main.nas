@@ -177,7 +177,7 @@ var animate = func(prop, target, rate) { # Rate is in deg/sec
 	
 }
 
-var addModel = func(path, lat, lon, alt, hdg)
+var addModels = func(path, index, lat, lon, alt, hdg)
 {
 	# Derived from jetways.nas
 
@@ -206,6 +206,7 @@ var addModel = func(path, lat, lon, alt, hdg)
 	model.getNode("pitch-deg-prop", 1).setValue(model_path ~ "/pitch-deg");
 	model.getNode("roll-deg", 1).setDoubleValue(0);
 	model.getNode("roll-deg-prop", 1).setValue(model_path ~ "/roll-deg");
+	model.getNode("ramp", 1).setValue(index);
 	model.getNode("load", 1).remove();
 	return model;
 };
@@ -214,9 +215,11 @@ var load_ramps = func(icao)
 {
 
     print("Loading ramps from airport...", icao);
-    var xml_file = ADDON_BASE_PATH ~ "/AI/Airports/" ~ icao ~ "/ramps.xml";
 
+	var xml_file =  getprop("/sim/fg-home") ~ "/Export/Addons/org.flightgear.addons.rampmarshall/AI/Airports/" ~ icao ~ "/ramps.xml";
 	var rampsTree = "/airports/"~icao~"/ramps";
+
+	setprop(rampsTree~"/loaded", 1); # Set Loaded flag so flightgear doesn't load again
 
 	readFile = io.read_properties(xml_file, rampsTree);
 	if(readFile == nil)
@@ -226,8 +229,6 @@ var load_ramps = func(icao)
 	}
 	else
 	{
-		setprop(rampsTree~"/loaded", 1); # Set Loaded flag so flightgear doesn't load again
-
 		print("Loaded Ramps at " ~ icao);
 
 		var ramps = props.globals.getNode(rampsTree).getChildren();
@@ -285,7 +286,7 @@ var load_ramps = func(icao)
 			print("Loaded ramp marshaller #", index);
 
 			# Add model to FlightGear
-			addModel(model_path, getprop(ramp_path~"latitude-deg"), getprop(ramp_path~"longitude-deg"), getprop(ramp_path~"altitude-m"), getprop(ramp_path~"heading-deg"));
+			addModels(model_path, index, getprop(ramp_path~"latitude-deg"), getprop(ramp_path~"longitude-deg"), getprop(ramp_path~"altitude-m"), getprop(ramp_path~"heading-deg"));
 		}
 	}
 };
@@ -334,6 +335,10 @@ var main_loop =
 		me.loopid = 0;
 		me.calcFunc = 1;
 		me.reset();
+		me.loopTimer = maketimer(me.UPDATE_INTERVAL, func(){
+			me.update();
+		});		
+		me.loopTimer.start();
         print("Initialized Ramp Marshall Script ");
 	},
 	stepTo: func(ramp_tree, pos_hash, rate)
@@ -354,11 +359,11 @@ var main_loop =
 	},
 	update : func
 	{
-		if(getprop("/addons/by-id/com.github.renanmsv.rampmarshall/addon-devel/enable") == 1)
+		if(getprop("/addons/by-id/org.flightgear.addons.rampmarshall/addon-devel/enable") == 1)
 		{
 			# Check if ramps are loaded at the nearest airport
 
-			if(getprop( "/airports/"~closestAirport()~"/ramps/loaded") == nil)
+			if(getprop( "/airports/"~closestAirport()~"/ramps/loaded") == nil or getprop( "/airports/"~closestAirport()~"/ramps/loaded") == 0)
 			{
 				load_ramps(closestAirport());
 				setprop("/airports/active-arpt", closestAirport());
@@ -570,7 +575,6 @@ var main_loop =
 	{
 		id == me.loopid or return;
 		me.update();
-		settimer(func { me._loop_(id); }, me.UPDATE_INTERVAL);
 	}
 };
 
@@ -599,6 +603,10 @@ var posData =
 var rampPos = [];
 var ramp_pos = geo.Coord.new();
 var ramp_dist = getprop("/sim/model/ramp/x-m");
+if(ramp_dist == nil)
+{
+	ramp_dist = getprop("/addons/by-id/org.flightgear.addons.rampmarshall/dialog/settings/aircraft-x-pos");
+}
 if (ramp_dist == nil) {
 	ramp_dist = -14;
 }
@@ -662,29 +670,37 @@ var closestAirport = func() {
 	return getprop("/sim/airport/closest-airport-id");
 };
 
-var unload = func(addon) {
-    # This function is for addon development only. It is called on addon 
-    # reload. The addons system will replace setlistener() and maketimer() to
-    # track this resources automatically for you.
-    #
-    # Listeners created with setlistener() will be removed automatically for you.
-    # Timers created with maketimer() will have their stop() method called 
-    # automatically for you. You should NOT use settimer anymore, see wiki at
-    # http://wiki.flightgear.org/Nasal_library#maketimer.28.29
-    #
-    # Other resources should be freed by adding the corresponding code here,
-    # e.g. myCanvas.del();
-}
-
 var ADDON_BASE_PATH = 0;
 var ADDON_NAMESPACE = 0;
 
 var main = func(addon) {
-    printlog("alert", "Ramp marshall addon initialized from path ", addon.basePath);
+    logprint("alert", "Ramp marshall addon initialized from path ", addon.basePath);
+	
     ADDON_BASE_PATH = addon.basePath;
 	ADDON_NAMESPACE = "__addon[" ~ addon.id ~ "]__";
+
     _setlistener("sim/signals/fdm-initialized", func()
-    {	
+    {
+		#var fname = addon.basePath;
+        #foreach(var script; ['save.nas']) {
+        #    print("Nasal file loaded " ~ fname ~ "/" ~ script);
+        #    io.load_nasal(fname ~ "/" ~ script, "rampmarshall");
+        #}
         main_loop.init();
     });
 }
+
+# On-screen displays
+var enableOSD = func {
+	var left  = screen.display.new(20, 10);
+	var right = screen.display.new(-300, 10);
+
+	right.add("/airports/active-ramp");
+	right.add("/airports/enable-ramp");
+	#left.add("/cover");
+	#left.add("/typesF");
+	#left.add("/coverF");
+
+	#right.add("/retardent-weight");
+};
+enableOSD();
